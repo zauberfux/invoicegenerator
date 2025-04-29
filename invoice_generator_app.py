@@ -42,6 +42,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         return proj
 
     df_time['Project_clean'] = df_time['Merged Project'].apply(clean_name)
+    df_time = df_time[df_time['Project_clean'] != 'Sales']
 
     project_code_map = dict(zip(df_projects['Project'], df_projects['Project code']))
     df_summary = df_time.groupby('Project_clean', as_index=False)['Total hrs'].sum()
