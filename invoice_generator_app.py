@@ -142,11 +142,11 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
 
 # --- Streamlit App ---
 st.title("Invoice Generator")
-st.write("Upload your timesheet CSV and project CSV. Set your monthly salary and download your generated invoice!")
+st.write("Go to Float, select Person (You!) and Time period (month). Move the Person/Projects slider to 'Person' and 'Export Table Data' for your time tracking data. Now move the slider to 'Projects' and 'Export Table Data' again, this time for exporting the Project codes. Upload both CSV files, enter your Monthly Salary, and download your invoice!")
 
 with st.form("input_form"):
-    timesheet_file = st.file_uploader("Upload Timesheet CSV", type="csv")
-    projects_file = st.file_uploader("Upload Projects CSV", type="csv")
+    timesheet_file = st.file_uploader("Upload 'Your Name-Table-...'.csv", type="csv")
+    projects_file = st.file_uploader("Upload 'Projects-Table...csv'", type="csv")
     monthly_salary = st.number_input("Monthly Salary (€)", step=100.0)
     generate_button = st.form_submit_button("Generate Invoice")
 
