@@ -16,7 +16,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     person_name = df_time_raw['Person'].iloc[0]
     dept_raw = df_time_raw['Department'].iloc[0]
     dept_num = re.search(r'\d+', str(dept_raw)).group()
-    
+
     # Extract 'All' Logged hrs
     all_logged_hrs_value = df_time_raw[df_time_raw['Project'] == 'All']['Logged hrs'].sum()
 
@@ -49,30 +49,44 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             proj = proj.strip()
             if proj.startswith(('Admin', 'BF')):
                 return 'Admin'
-            if proj.startswith('Sales'):
-                return 'Sales'
+            if proj.startswith('Sales_BF'):
+                return proj  # preserve Sales_BFxx for reassignment
             return proj
         return proj
 
     df_time['Project_clean'] = df_time['Merged Project'].apply(clean_project_name)
     df_summary = df_time.groupby('Project_clean', as_index=False)['Total hrs'].sum()
 
-    # Project code mapping
+    # Map project codes from uploaded file
     project_code_map = dict(zip(df_projects['Project'], df_projects['Project code']))
+
+    def generate_bf_general_code(dept_num: str, company_prefix: str):
+        return f"{company_prefix}{dept_num.zfill(2)}000"
+
+    # Manual code overrides
     manual_codes = {
-        'Sales PCR': '299300',
-        'Sales PCG': '199300',
-        f'BF{dept_num} General (PCR)': '299300',
-        f'BF{dept_num} General (PCG)': '199300',
+        f'BF{dept_num} General (PCR)': generate_bf_general_code(dept_num, '2'),
+        f'BF{dept_num} General (PCG)': generate_bf_general_code(dept_num, '1'),
     }
 
-    # Special splits
-    df_summary.loc[df_summary['Project_clean'] == 'Sales', 'Project_clean'] = None
-    sales_hours = df_summary['Total hrs'][df_summary['Project_clean'].isna()].sum()/2
-    df_sales_split = pd.DataFrame({
-        'Project_clean': ['Sales PCR', 'Sales PCG'],
-        'Total hrs': [sales_hours, sales_hours]
-    })
+    # Handle Sales_BFxx reassignment to BFxx General (PCG/PCR)
+    sales_to_general_rows = []
+
+    for idx, row in df_summary.iterrows():
+        project = row['Project_clean']
+        total_hrs = row['Total hrs']
+
+        if project.startswith('Sales_BF'):
+            bf_code = project.replace('Sales_BF', '').strip()
+            general_pc = f'BF{bf_code} General (PCG)'
+            general_pr = f'BF{bf_code} General (PCR)'
+            hrs_half = total_hrs / 2
+            sales_to_general_rows.append({'Project_clean': general_pc, 'Total hrs': hrs_half})
+            sales_to_general_rows.append({'Project_clean': general_pr, 'Total hrs': hrs_half})
+
+    df_summary = df_summary[~df_summary['Project_clean'].str.startswith('Sales_BF')]
+    df_sales_to_general = pd.DataFrame(sales_to_general_rows)
+    df_summary = pd.concat([df_summary, df_sales_to_general], ignore_index=True)
 
     sickleave_hours = df_summary[df_summary['Project_clean'] == 'Sick leave']['Total hrs'].sum()
     holiday_hours = df_summary[df_summary['Project_clean'] == 'Holiday']['Total hrs'].sum()
@@ -85,8 +99,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     })
 
     df_final = pd.concat([
-        df_summary.dropna(subset=['Project_clean']),
-        df_sales_split,
+        df_summary,
         df_bf_split
     ], ignore_index=True)
 
