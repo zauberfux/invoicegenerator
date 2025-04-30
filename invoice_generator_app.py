@@ -66,7 +66,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     ws['A3'] = "Time Period:"; ws['B3'] = time_period
     ws['A4'] = "Monthly Salary:"; ws['B4'] = monthly_salary; ws['B4'].number_format = u'€#,##0.00'
     ws['A5'] = "Number of Days Worked:"; ws['B5'] = f"={all_logged_hrs}/8"
-    ws['A6'] = "Paid Time-off Days:"; ws['B6'] = f"={all_paid_timeoff_hrs}/8"; ws['C6'] = "(contains sick leave + vacation + public holidays)
+    ws['A6'] = "Paid Time-off Days:"; ws['B6'] = f"={all_paid_timeoff_hrs}/8"; ws['C6'] = "(contains sick leave + vacation + public holidays)"
     ws['A7'] = "Total days:"; ws['B7'] = "=B5+B6"
     ws['A8'] = "Day Rate:"; ws['B8'] = "=B4/B7"; ws['B8'].number_format = u'€#,##0.00'
 
