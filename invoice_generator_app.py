@@ -43,13 +43,28 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         'Project Code': [f'1{dept_num}000', f'2{dept_num}000']
     })
 
+    # Sales_BFxx splitting
+    df_summary = df_time.groupby('Project', as_index=False)['Total hrs'].sum()
+    df_sales = df_summary[df_summary['Project'].str.startswith('Sales_BF', na=False)].copy()
+    sales_rows = []
+    for _, row in df_sales.iterrows():
+        match = re.search(r'Sales_BF(\d{2})', row['Project'])
+        if match:
+            bf = match.group(1)
+            hrs = row['Total hrs'] / 2
+            sales_rows.extend([
+                {'Project': f'BF{bf} General (PCG)', 'Total hrs': hrs, 'Project Code': f'1{bf}000'},
+                {'Project': f'BF{bf} General (PCR)', 'Total hrs': hrs, 'Project Code': f'2{bf}000'}
+            ])
+    df_sales_split = pd.DataFrame(sales_rows)
+
     # Regular projects
     df_regular = df_time[~df_time['Project'].str.startswith(tuple(admin_time_own_BF), na=False)].copy()
     df_regular = df_regular.groupby('Project', as_index=False)['Total hrs'].sum()
     df_regular['Project Code'] = df_regular['Project'].map(project_code_map)
 
     # Combine all
-    df_final = pd.concat([df_regular, df_bf_split], ignore_index=True)
+    df_final = pd.concat([df_regular, df_sales_split, df_bf_split], ignore_index=True)
     df_final = df_final.groupby(['Project', 'Project Code'], as_index=False)['Total hrs'].sum()
     df_final['Days'] = df_final['Total hrs'] / 8
 
@@ -66,7 +81,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     ws['A3'] = "Time Period:"; ws['B3'] = time_period
     ws['A4'] = "Monthly Salary:"; ws['B4'] = monthly_salary; ws['B4'].number_format = u'€#,##0.00'
     ws['A5'] = "Number of Days Worked:"; ws['B5'] = f"={all_logged_hrs}/8"
-    ws['A6'] = "Paid Time-off Days:"; ws['B6'] = f"={all_paid_timeoff_hrs}/8"; ws['C6'] = "(contains sick leave + vacation + public holidays)"
+    ws['A6'] = "Paid Time-off Days:"; ws['B6'] = f"={all_paid_timeoff_hrs}/8"
     ws['A7'] = "Total days:"; ws['B7'] = "=B5+B6"
     ws['A8'] = "Day Rate:"; ws['B8'] = "=B4/B7"; ws['B8'].number_format = u'€#,##0.00'
 
