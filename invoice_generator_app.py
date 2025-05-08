@@ -147,9 +147,10 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
 st.title("Invoice Generator")
 st.write(
     """
-    1. Go to Float → Export Table for **'Person'** view (time tracking data).  
-    2. Then export from **'Projects'** view (to get project codes & tags).  
-    3. Upload both CSVs below, enter your Monthly Salary, and generate your invoice.
+    1. Go to Float, select Person (You!) and Time period (month). 
+    2. Move the Person/Projects slider to 'Person' and 'Export Table Data' for your time tracking data.  
+    3. Then move the slider to 'Projects' and 'Export Table Data' again, this time for exporting the Project codes.
+    4. Upload both CSV files, enter your Monthly Salary, and download your invoice.
     """
 )
 
