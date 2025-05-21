@@ -33,10 +33,10 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
 
     project_code_map = dict(zip(df_projects['Project'], df_projects['Project code']))
 
-    # Admin/HR/IT/Time-off to own BFXX General
-    admin_time_own_BF = ['Admin', 'BF coordination', 'HR', 'IT']
-    excluded_hrs = df_time[df_time['Project'].str.startswith(tuple(admin_time_own_BF), na=False)]['Total hrs'].sum()
-    bf_general_hours = excluded_hrs + all_paid_timeoff_hrs
+    # Admin/BF/HR/IT/Time-off to own BFXX General
+    admin_keywords = ['Admin', 'BF coordination', 'HR', 'IT']
+    admin_time_own_bf = df_time[df_time['Project'].str.startswith(tuple(admin_keywords), na=False)]['Total hrs'].sum()
+    bf_general_hours = admin_time_own_bf + all_paid_timeoff_hrs
     df_bf_split = pd.DataFrame({
         'Project': [f'BF{dept_num} General (PCG)', f'BF{dept_num} General (PCR)'],
         'Total hrs': [bf_general_hours / 2, bf_general_hours / 2],
