@@ -39,8 +39,9 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     bf_general_hours = excluded_hrs + all_paid_timeoff_hrs
     df_bf_split = pd.DataFrame({
         'Project': [f'BF{dept_num} General (PCG)', f'BF{dept_num} General (PCR)'],
-        'Total hrs': [bf_general_hours/2, bf_general_hours/2],
-        'Project Code': [f'1{dept_num}000', f'2{dept_num}000']
+        'Total hrs': [bf_general_hours / 2, bf_general_hours / 2],
+        'Project Code': [f'1{dept_num}000', f'2{dept_num}000'],
+        'Company': ['PCG', 'PCR']
     })
 
     # Sales_BFxx splitting
@@ -53,24 +54,46 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             bf = match.group(1)
             hrs = row['Total hrs'] / 2
             sales_rows.extend([
-                {'Project': f'BF{bf} General (PCG)', 'Total hrs': hrs, 'Project Code': f'1{bf}000'},
-                {'Project': f'BF{bf} General (PCR)', 'Total hrs': hrs, 'Project Code': f'2{bf}000'}
+                {'Project': f'BF{bf} General (PCG)', 'Total hrs': hrs, 'Project Code': f'1{bf}000', 'Company': 'PCG'},
+                {'Project': f'BF{bf} General (PCR)', 'Total hrs': hrs, 'Project Code': f'2{bf}000', 'Company': 'PCR'}
             ])
     df_sales_split = pd.DataFrame(sales_rows)
 
     # Regular projects
     df_regular = df_time[~df_time['Project'].str.startswith(tuple(admin_time_own_BF), na=False)].copy()
     df_regular = df_regular.groupby('Project', as_index=False)['Total hrs'].sum()
-    df_regular['Project Code'] = df_regular['Project'].map(project_code_map)
+
+    def resolve_project_code_and_company(row):
+        project = row['Project']
+        code = project_code_map.get(project)
+
+        if pd.notna(code) and str(code).strip():
+            return pd.Series({'Project Code': code, 'Company': 'PCG' if str(code).startswith('1') else 'PCR'})
+
+        # Lookup tags from df_projects
+        tags = df_projects[df_projects['Project'] == project]['Tags'].dropna().astype(str).str.upper()
+        all_tags = ','.join(tags.tolist())
+
+        if 'PCG' in all_tags:
+            company = 'PCG'
+        elif 'PCR' in all_tags:
+            company = 'PCR'
+        else:
+            company = 'no company in project tags'
+
+        return pd.Series({'Project Code': 'no project code', 'Company': company})
+
+    df_regular[['Project Code', 'Company']] = df_regular.apply(resolve_project_code_and_company, axis=1)
 
     # Combine all
     df_final = pd.concat([df_regular, df_sales_split, df_bf_split], ignore_index=True)
-    df_final = df_final.groupby(['Project', 'Project Code'], as_index=False)['Total hrs'].sum()
+    df_final = df_final.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Total hrs'].sum()
     df_final['Days'] = df_final['Total hrs'] / 8
 
-    df_pcg = df_final[df_final['Project Code'].astype(str).str.startswith('1')]
-    df_pcr = df_final[df_final['Project Code'].astype(str).str.startswith('2')]
+    df_pcg = df_final[df_final['Company'] == 'PCG']
+    df_pcr = df_final[df_final['Company'] == 'PCR']
 
+    # Build Excel
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
@@ -89,7 +112,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         ws[f"A{start_row}"] = title
         ws[f"A{start_row}"].font = Font(bold=True)
         ws.append(['Project Code', 'Project', 'Logged hrs', 'Days', 'Day Rate', 'Costs'])
-        for cell in ws[start_row+1]:
+        for cell in ws[start_row + 1]:
             cell.font = Font(bold=True)
         start_row += 2
 
@@ -99,15 +122,15 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         data_start = start_row
         data_end = start_row + len(df) - 1
 
-        for r in range(data_start, data_end+1):
+        for r in range(data_start, data_end + 1):
             ws[f"D{r}"] = f"=C{r}/8"
             ws[f"E{r}"] = "=$B$8"; ws[f"E{r}"].number_format = u'€#,##0.00'
             ws[f"F{r}"] = f"=D{r}*E{r}"; ws[f"F{r}"].number_format = u'€#,##0.00'
 
-        ws[f"E{data_end+1}"] = "Subtotal:"; ws[f"E{data_end+1}"].font = Font(bold=True)
-        ws[f"F{data_end+1}"] = f"=SUM(F{data_start}:F{data_end})"
-        ws[f"F{data_end+1}"].number_format = u'€#,##0.00'
-        ws[f"F{data_end+1}"].font = Font(bold=True)
+        ws[f"E{data_end + 1}"] = "Subtotal:"; ws[f"E{data_end + 1}"].font = Font(bold=True)
+        ws[f"F{data_end + 1}"] = f"=SUM(F{data_start}:F{data_end})"
+        ws[f"F{data_end + 1}"].number_format = u'€#,##0.00'
+        ws[f"F{data_end + 1}"].font = Font(bold=True)
 
         return data_end + 3, data_end + 1
 
@@ -127,7 +150,13 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
 
 # --- Streamlit App ---
 st.title("Invoice Generator")
-st.write("Go to Float, select Person (You!) and Time period (month). Move the Person/Projects slider to 'Person' and 'Export Table Data' for your time tracking data. Now move the slider to 'Projects' and 'Export Table Data' again, this time for exporting the Project codes. Upload both CSV files, enter your Monthly Salary, and download your invoice!")
+
+st.write("""
+1. Go to Float and select your name and the relevant month.
+2. Set the view to **Person** and export the **Table Data** CSV.
+3. Then switch to **Projects** view and export the **Project Table Data** CSV.
+4. Upload both files below, input your salary, and generate your invoice.
+""")
 
 with st.form("input_form"):
     timesheet_file = st.file_uploader("Upload 'Your Name-Table-...'.csv", type="csv")
