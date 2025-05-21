@@ -16,7 +16,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     dept_num = re.search(r'\d+', str(dept_raw)).group()
     project_code_map = dict(zip(df_projects['Project'], df_projects['Project code']))
 
-    # --- Time data preparation ---
+    # Total hrs per line
     df_time_raw['Total hrs per line'] = (
         df_time_raw['Logged hrs'].fillna(0) +
         df_time_raw['Time off hrs'].fillna(0) +
@@ -24,7 +24,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     )
     df_time = df_time_raw[df_time_raw['Total hrs per line'] > 0].copy()
 
-    # --- Time-off logic (exclude overtime) ---
+    # Overtime
     overtime_hrs = df_time_raw[
         df_time_raw['Time off'].fillna("").str.contains("ausgleich für zusätzliche arbeitszeit", case=False)
     ]['Time off hrs'].sum()
@@ -36,13 +36,13 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         overtime_hrs
     )
 
-    # --- Time period parsing ---
+    # Time period
     filename = timesheet_file.name
     match = re.search(r'Table-(\d{8})', filename)
     year, month = match.group(1)[:4], match.group(1)[4:6]
     time_period = datetime.strptime(f"{year}-{month}-01", "%Y-%m-%d").strftime("%B %Y")
 
-    # --- Admin/internal allocation to BF General ---
+    # Admin/internal hours
     admin_keywords = ['Admin', 'BF coordination', 'HR', 'IT', 'Finances']
     admin_time_own_bf = df_time[
         df_time['Project'].str.startswith(tuple(admin_keywords), na=False)
@@ -56,7 +56,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         'Company': ['PCG', 'PCR']
     })
 
-    # --- Sales project split ---
+    # Sales split
     df_summary = df_time.groupby('Project', as_index=False)['Logged hrs'].sum()
     df_sales = df_summary[df_summary['Project'].str.startswith('Sales_BF', na=False)].copy()
     sales_rows = []
@@ -71,22 +71,16 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             ])
     df_sales_split = pd.DataFrame(sales_rows)
 
-    # --- Regular projects: only those starting with two digits and _ ---
+    # Regular projects with two-digit prefix
     df_regular = df_time[df_time['Project'].fillna("").str.match(r"^\d{2}_")].copy()
-    df_regular = df_regular.groupby('Project', as_index=False)['Logged hrs'].sum()
-    df_regular = df_regular.rename(columns={'Logged hrs': 'Total hrs'})
 
     def resolve_project_code_and_company(row):
         project = row['Project']
         code = project_code_map.get(project)
-
         if pd.notna(code) and str(code).strip():
             return pd.Series({'Project Code': code, 'Company': 'PCG' if str(code).startswith('1') else 'PCR'})
-
-        # Missing or empty project code — fallback to tags
         tags = df_projects[df_projects['Project'] == project]['Tags'].dropna().astype(str).str.upper()
         all_tags = ','.join(tags.tolist())
-
         if 'PCG' in all_tags:
             return pd.Series({'Project Code': 'no project code', 'Company': 'PCG'})
         elif 'PCR' in all_tags:
@@ -95,16 +89,14 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             return pd.Series({'Project Code': 'no project code', 'Company': 'no company in project tags'})
 
     df_regular[['Project Code', 'Company']] = df_regular.apply(resolve_project_code_and_company, axis=1)
+    df_regular = df_regular.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Logged hrs'].sum()
+    df_regular = df_regular.rename(columns={'Logged hrs': 'Total hrs'})
 
-    # --- Combine all project blocks ---
+    # Combine all
     df_final = pd.concat([df_regular, df_sales_split, df_bf_split], ignore_index=True)
     df_final = df_final.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Total hrs'].sum()
     df_final['Days'] = df_final['Total hrs'] / 8
 
-    df_pcg = df_final[df_final['Company'] == 'PCG']
-    df_pcr = df_final[df_final['Company'] == 'PCR']
-
-    # --- Excel Export ---
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
@@ -125,27 +117,22 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         for cell in ws[start_row+1]:
             cell.font = Font(bold=True)
         start_row += 2
-
         for _, row in df.iterrows():
             ws.append([row['Project Code'], row['Project'], row['Total hrs']])
-
         data_start = start_row
         data_end = start_row + len(df) - 1
-
         for r in range(data_start, data_end+1):
             ws[f"D{r}"] = f"=C{r}/8"
             ws[f"E{r}"] = "=$B$8"; ws[f"E{r}"].number_format = u'€#,##0.00'
             ws[f"F{r}"] = f"=D{r}*E{r}"; ws[f"F{r}"].number_format = u'€#,##0.00'
-
         ws[f"E{data_end+1}"] = "Subtotal:"; ws[f"E{data_end+1}"].font = Font(bold=True)
         ws[f"F{data_end+1}"] = f"=SUM(F{data_start}:F{data_end})"
         ws[f"F{data_end+1}"].number_format = u'€#,##0.00'
         ws[f"F{data_end+1}"].font = Font(bold=True)
-
         return data_end + 3, data_end + 1
 
-    r, pcg_subtotal = write_table(df_pcg, 12, "PCG Projects")
-    r, pcr_subtotal = write_table(df_pcr, r, "PCR Projects")
+    r, pcg_subtotal = write_table(df_final[df_final['Company'] == 'PCG'], 12, "PCG Projects")
+    r, pcr_subtotal = write_table(df_final[df_final['Company'] == 'PCR'], r, "PCR Projects")
     ws[f"E{r}"] = "Grand Total:"; ws[f"E{r}"].font = Font(bold=True)
     ws[f"F{r}"] = f"=F{pcg_subtotal}+F{pcr_subtotal}"; ws[f"F{r}"].number_format = u'€#,##0.00'; ws[f"F{r}"].font = Font(bold=True)
 
