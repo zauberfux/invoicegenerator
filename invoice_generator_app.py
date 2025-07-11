@@ -7,6 +7,7 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font
 from decimal import Decimal
+from collections import defaultdict
 
 def generate_invoice(timesheet_file, projects_file, monthly_salary):
     df_time_raw = pd.read_csv(timesheet_file)
@@ -50,7 +51,6 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         else:
             return pd.Series({'Project Code': 'no project code', 'Company': 'no company in project tags'})
 
-    # Billable projects and quota
     df_billable_input = df_time_raw[df_time_raw['Project'].fillna('').str.match(r'^\d{2}_')].copy()
     df_billable_input[['Project Code', 'Company']] = df_billable_input.apply(resolve_project_code_and_company, axis=1)
 
@@ -59,7 +59,6 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     pcg_ratio = float(quota.get('PCG', 0)) / total_real if total_real > 0 else 0.5
     pcr_ratio = float(quota.get('PCR', 0)) / total_real if total_real > 0 else 0.5
 
-    # Quota-safe splitting function
     def split_quota_rows(label, hrs, pcg_code, pcr_code):
         b = Decimal(str(hrs)).quantize(Decimal('0.0001'))
         pcg = Decimal(str(pcg_ratio)).quantize(Decimal('0.0001'))
@@ -72,24 +71,33 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             'Formula': [f'={b}*{pcg}', f'={b}*{pcr}']
         })
 
-    # Gather raw contributions to BF General
+    # 1. Own BF hours
     admin_hrs = df_time_raw[df_time_raw['Project'].str.startswith(tuple(admin_keywords), na=False)]['Logged hrs'].sum()
+    paid_timeoff_hrs = (
+        df_time_raw['Time off hrs'].sum() +
+        df_time_raw['Holiday hrs'].sum() -
+        overtime_hrs
+    )
+    own_bf_total = admin_hrs + paid_timeoff_hrs
+
+    # 2. P&C + Sales Support
     pc_hrs = df_time_raw[df_time_raw['Project'].str.startswith(tuple(pc_keywords), na=False)]['Logged hrs'].sum()
     sales_support_hrs = df_time_raw[df_time_raw['Project'].isin(sales_support_projects)]['Logged hrs'].sum()
 
-    # Redistributed sales/marketing projects
+    # 3. Sales/Marketing redistribution
     df_sm = df_time_raw[df_time_raw['Project'].str.match(r'^(Sales_BF|Marketing_BF)\d{2}', na=False)]
-    df_sm = df_sm.groupby('Project', as_index=False)['Logged hrs'].sum()
-    bf_hours = {}
-    bf_hours[dept_num] = admin_hrs + all_paid_timeoff_hrs
+    df_sm_grouped = df_sm.groupby('Project', as_index=False)['Logged hrs'].sum()
 
-    for _, row in df_sm.iterrows():
+    bf_hours = defaultdict(float)
+    bf_hours[dept_num] += own_bf_total
+
+    for _, row in df_sm_grouped.iterrows():
         match = re.search(r'(?:Sales_BF|Marketing_BF)(\d{2})', row['Project'])
         if match:
             bf = match.group(1)
-            bf_hours[bf] = bf_hours.get(bf, 0) + row['Logged hrs']
+            bf_hours[bf] += row['Logged hrs']
 
-    # Build final non-billable quota-split table
+    # 4. Assemble all non-billable rows using quota
     df_split = []
     for bf, hrs in bf_hours.items():
         if hrs > 0:
@@ -112,7 +120,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     })
     df_final['Days'] = df_final['Total hrs'] / 8
 
-    # Excel
+    # Excel export
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
