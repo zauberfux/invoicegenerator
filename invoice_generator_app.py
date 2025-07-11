@@ -148,7 +148,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     return output, person_name, time_period
 
 # --- Streamlit App UI ---
-st.title("Invoice Generator")
+st.title("Invoice Generator v2")
 
 st.write("""
 1. Go to Float and select your name and the relevant month.
