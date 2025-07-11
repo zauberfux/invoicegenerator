@@ -34,7 +34,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     df_time_raw['Time off hrs'].sum() +
     df_time_raw['Holiday hrs'].sum() -
     overtime_hrs
-)
+    )
 
     )
 
