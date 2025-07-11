@@ -16,7 +16,6 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     dept_num = re.search(r'\d+', str(dept_raw)).group()
     project_code_map = dict(zip(df_projects['Project'], df_projects['Project code']))
 
-    # Total hrs per line
     df_time_raw['Total hrs per line'] = (
         df_time_raw['Logged hrs'].fillna(0) +
         df_time_raw['Time off hrs'].fillna(0) +
@@ -24,12 +23,10 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     )
     df_time = df_time_raw[df_time_raw['Total hrs per line'] > 0].copy()
 
-    # Overtime
     overtime_hrs = df_time_raw[
         df_time_raw['Time off'].fillna("").str.contains("ausgleich für zusätzliche arbeitszeit", case=False)
     ]['Time off hrs'].sum()
 
-    # Total hours and time-off
     all_logged_hrs = df_time_raw['Logged hrs'].sum()
     all_paid_timeoff_hrs = (
         df_time_raw['Time off hrs'].sum() +
@@ -37,13 +34,12 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         overtime_hrs
     )
 
-    # Time period from filename
     filename = timesheet_file.name
     match = re.search(r'Table-(\d{8})', filename)
     year, month = match.group(1)[:4], match.group(1)[4:6]
     time_period = datetime.strptime(f"{year}-{month}-01", "%Y-%m-%d").strftime("%B %Y")
 
-    # Split logic for BF General, People & Culture, and Sales Support
+    # Admin and allocation projects
     admin_keywords = ['Admin', 'BF coordination', 'IT', 'Finances']
     pc_keywords = ['HR', 'P&C']
     sales_projects = ['Sales I proposal support', 'Tender Screening']
@@ -86,14 +82,17 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     df_bf_split = pd.concat([bf_split, pc_split, sales_split], ignore_index=True)
     df_bf_split = df_bf_split[df_bf_split['Total hrs'] > 0].copy()
 
-    # Sales_BF redistribution (from Float)
+    # ✅ NEW: include Sales_BF and Marketing_BF projects
     df_summary = df_time.groupby('Project', as_index=False)['Logged hrs'].sum()
-    df_sales = df_summary[df_summary['Project'].str.startswith('Sales_BF', na=False)].copy()
+    df_sales = df_summary[
+        df_summary['Project'].str.match(r'^(Sales_BF|Marketing_BF)\d{2}', na=False)
+    ].copy()
+
     sales_rows = []
     for _, row in df_sales.iterrows():
-        match = re.search(r'Sales_BF(\d{2})', row['Project'])
+        match = re.search(r'(Sales_BF|Marketing_BF)(\d{2})', row['Project'])
         if match:
-            bf = match.group(1)
+            bf = match.group(2)
             hrs = row['Logged hrs'] / 2
             sales_rows.extend([
                 {'Project': f'BF{bf} General (PCG)', 'Total hrs': hrs, 'Project Code': f'1{bf}000', 'Company': 'PCG'},
@@ -101,7 +100,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             ])
     df_sales_split = pd.DataFrame(sales_rows)
 
-    # Regular projects with two-digit prefix
+    # Regular project work
     df_regular = df_time[df_time['Project'].fillna("").str.match(r"^\d{2}_")].copy()
 
     def resolve_project_code_and_company(row):
@@ -122,7 +121,6 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     df_regular = df_regular.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Logged hrs'].sum()
     df_regular = df_regular.rename(columns={'Logged hrs': 'Total hrs'})
 
-    # Combine all data
     df_final = pd.concat([df_regular, df_sales_split, df_bf_split], ignore_index=True)
     df_final = df_final.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Total hrs'].sum()
     df_final['Days'] = df_final['Total hrs'] / 8
@@ -184,7 +182,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     output.seek(0)
     return output, person_name, time_period
 
-# --- Streamlit App UI ---
+# --- Streamlit UI ---
 st.title("Invoice Generator")
 
 st.write("""
