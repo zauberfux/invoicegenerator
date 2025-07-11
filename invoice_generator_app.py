@@ -29,14 +29,15 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         df_time_raw['Time off'].fillna("").str.contains("ausgleich für zusätzliche arbeitszeit", case=False)
     ]['Time off hrs'].sum()
 
+    # Corrected: Include all actual time
     all_logged_hrs = df_time_raw['Logged hrs'].sum()
     all_paid_timeoff_hrs = (
-    df_time_raw['Time off hrs'].sum() +
-    df_time_raw['Holiday hrs'].sum() -
-    overtime_hrs
+        df_time_raw['Time off hrs'].sum() +
+        df_time_raw['Holiday hrs'].sum() -
+        overtime_hrs
     )
 
-    # Time period
+    # Time period from filename
     filename = timesheet_file.name
     match = re.search(r'Table-(\d{8})', filename)
     year, month = match.group(1)[:4], match.group(1)[4:6]
@@ -71,7 +72,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             ])
     df_sales_split = pd.DataFrame(sales_rows)
 
-    # Regular projects with two-digit prefix
+    # Regular projects
     df_regular = df_time[df_time['Project'].fillna("").str.match(r"^\d{2}_")].copy()
 
     def resolve_project_code_and_company(row):
@@ -96,6 +97,9 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     df_final = pd.concat([df_regular, df_sales_split, df_bf_split], ignore_index=True)
     df_final = df_final.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Total hrs'].sum()
     df_final['Days'] = df_final['Total hrs'] / 8
+
+    # Unmatched projects
+    df_unmatched = df_final[df_final['Company'] == 'no company in project tags']
 
     wb = Workbook()
     ws = wb.active
@@ -133,8 +137,14 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
 
     r, pcg_subtotal = write_table(df_final[df_final['Company'] == 'PCG'], 12, "PCG Projects")
     r, pcr_subtotal = write_table(df_final[df_final['Company'] == 'PCR'], r, "PCR Projects")
-    ws[f"E{r}"] = "Grand Total:"; ws[f"E{r}"].font = Font(bold=True)
-    ws[f"F{r}"] = f"=F{pcg_subtotal}+F{pcr_subtotal}"; ws[f"F{r}"].number_format = u'€#,##0.00'; ws[f"F{r}"].font = Font(bold=True)
+
+    if not df_unmatched.empty:
+        r, _ = write_table(df_unmatched, r, "Unmatched Projects")
+        ws[f"E{r}"] = "⚠️ Note:"; ws[f"E{r}"].font = Font(bold=True)
+        ws[f"F{r}"] = "These projects lack company tags or codes and are excluded from totals"
+
+    ws[f"E{r+2}"] = "Grand Total:"; ws[f"E{r+2}"].font = Font(bold=True)
+    ws[f"F{r+2}"] = f"=F{pcg_subtotal}+F{pcr_subtotal}"; ws[f"F{r+2}"].number_format = u'€#,##0.00'; ws[f"F{r+2}"].font = Font(bold=True)
 
     for col in ws.columns:
         width = max(len(str(cell.value)) if cell.value else 0 for cell in col) + 2
@@ -146,7 +156,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     return output, person_name, time_period
 
 # --- Streamlit App UI ---
-st.title("Invoice Generator v2")
+st.title("Invoice Generator")
 
 st.write("""
 1. Go to Float and select your name and the relevant month.
