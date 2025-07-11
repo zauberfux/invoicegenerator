@@ -58,20 +58,20 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         else:
             return pd.Series({'Project Code': 'no project code', 'Company': 'no company in project tags'})
 
-    # Billable projects input for quota and final export
+    # Real (billable) projects
     df_billable_input = df_time[df_time['Project'].fillna('').str.match(r'^\d{2}_')].copy()
     df_billable_input[['Project Code', 'Company']] = df_billable_input.apply(resolve_project_code_and_company, axis=1)
 
-    # Quota based on full data
     quota = df_billable_input.groupby('Company')['Logged hrs'].sum()
     total_real = quota.sum()
     pcg_ratio = float(quota.get('PCG', 0)) / total_real if total_real > 0 else 0.5
     pcr_ratio = float(quota.get('PCR', 0)) / total_real if total_real > 0 else 0.5
 
+    # Build General hours blocks
     admin_time = df_time[df_time['Project'].str.startswith(tuple(admin_keywords), na=False)]['Logged hrs'].sum()
     pc_time = df_time[df_time['Project'].str.startswith(tuple(pc_keywords), na=False)]['Logged hrs'].sum()
-    sales_time = df_time[df_time['Project'].isin(sales_projects)]['Logged hrs'].sum()
-    bf_general_hrs = admin_time + all_paid_timeoff_hrs
+    sales_support_time = df_time[df_time['Project'].isin(sales_projects)]['Logged hrs'].sum()
+    own_bf_hours = admin_time + all_paid_timeoff_hrs
 
     def split_row(label, base_hrs, pcg_ratio, pcr_ratio, pcg_code, pcr_code):
         if base_hrs == 0:
@@ -88,11 +88,12 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         })
 
     df_bf_split = pd.concat([
-        split_row(f'BF{dept_num} General', bf_general_hrs, pcg_ratio, pcr_ratio, f'1{dept_num}000', f'2{dept_num}000'),
+        split_row(f'BF{dept_num} General', own_bf_hours, pcg_ratio, pcr_ratio, f'1{dept_num}000', f'2{dept_num}000'),
         split_row('People & Culture', pc_time, pcg_ratio, pcr_ratio, '199500', '299500'),
-        split_row('Sales', sales_time, pcg_ratio, pcr_ratio, '199300', '299300')
+        split_row('Sales', sales_support_time, pcg_ratio, pcr_ratio, '199300', '299300')
     ], ignore_index=True)
 
+    # BF redistribution from Sales_BFxx or Marketing_BFxx
     df_summary = df_time.groupby('Project', as_index=False)['Logged hrs'].sum()
     df_bf_dist = df_summary[df_summary['Project'].str.match(r'^(Sales_BF|Marketing_BF)\d{2}', na=False)].copy()
 
@@ -108,7 +109,6 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             dist_rows.append({'Project': f'BF{bf} General (PCR)', 'Project Code': f'2{bf}000', 'Company': 'PCR', 'Formula': f'={h}*{pcr}'})
     df_sales_split = pd.DataFrame(dist_rows)
 
-    # Final billable DataFrame for export
     df_billable = df_billable_input.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Logged hrs'].sum()
     df_billable = df_billable.rename(columns={'Logged hrs': 'Total hrs'})
     df_billable["Formula"] = None
@@ -117,14 +117,13 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     frames = [df for df in frames if not df.empty and df.dropna(how="all").shape[0] > 0]
     df_final = pd.concat(frames, ignore_index=True)
 
-    # Deduplicate BFXX General by grouping across keys (not Formula)
     df_final = df_final.groupby(['Project', 'Project Code', 'Company'], as_index=False).agg({
         'Total hrs': 'sum',
         'Formula': 'first'
     })
     df_final['Days'] = df_final['Total hrs'] / 8
 
-    # --- Excel Output ---
+    # Excel Export
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
