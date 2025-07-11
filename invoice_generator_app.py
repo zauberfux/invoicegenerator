@@ -6,7 +6,7 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 
 def generate_invoice(timesheet_file, projects_file, monthly_salary):
     df_time_raw = pd.read_csv(timesheet_file)
@@ -79,7 +79,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             'Total hrs': [None, None],
             'Project Code': [pcg_code, pcr_code],
             'Company': ['PCG', 'PCR'],
-            'Formula': [f'={b}*{pcg}'.replace('.', ','), f'={b}*{pcr}'.replace('.', ',')]
+            'Formula': [f'={b}*{pcg}', f'={b}*{pcr}']
         })
 
     df_bf_split = pd.concat([
@@ -99,8 +99,8 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             h = Decimal(str(row['Logged hrs'])).quantize(Decimal('0.0001'))
             pcg = Decimal(str(pcg_ratio)).quantize(Decimal('0.0001'))
             pcr = Decimal(str(pcr_ratio)).quantize(Decimal('0.0001'))
-            dist_rows.append({'Project': f'BF{bf} General (PCG)', 'Project Code': f'1{bf}000', 'Company': 'PCG', 'Formula': f'={h}*{pcg}'.replace('.', ',')})
-            dist_rows.append({'Project': f'BF{bf} General (PCR)', 'Project Code': f'2{bf}000', 'Company': 'PCR', 'Formula': f'={h}*{pcr}'.replace('.', ',')})
+            dist_rows.append({'Project': f'BF{bf} General (PCG)', 'Project Code': f'1{bf}000', 'Company': 'PCG', 'Formula': f'={h}*{pcg}'})
+            dist_rows.append({'Project': f'BF{bf} General (PCR)', 'Project Code': f'2{bf}000', 'Company': 'PCR', 'Formula': f'={h}*{pcr}'})
     df_sales_split = pd.DataFrame(dist_rows)
 
     df_regular = df_real.copy()
@@ -170,7 +170,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     output.seek(0)
     return output, person_name, time_period
 
-# --- Streamlit App UI ---
+# Streamlit UI
 st.title("Invoice Generator")
 
 st.write("""
