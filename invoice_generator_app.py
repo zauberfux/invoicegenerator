@@ -58,19 +58,25 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         else:
             return pd.Series({'Project Code': 'no project code', 'Company': 'no company in project tags'})
 
-    df_real = df_time[df_time['Project'].fillna('').str.match(r'^\d{2}_')].copy()
-    df_real[['Project Code', 'Company']] = df_real.apply(resolve_project_code_and_company, axis=1)
-    quota = df_real.groupby('Company')['Logged hrs'].sum()
+    # --- Billable projects (00_ etc)
+    df_billable = df_time[df_time['Project'].fillna('').str.match(r'^\d{2}_')].copy()
+    df_billable[['Project Code', 'Company']] = df_billable.apply(resolve_project_code_and_company, axis=1)
+
+    # Quota
+    quota = df_billable.groupby('Company')['Logged hrs'].sum()
     total_real = quota.sum()
     pcg_ratio = float(quota.get('PCG', 0)) / total_real if total_real > 0 else 0.5
     pcr_ratio = float(quota.get('PCR', 0)) / total_real if total_real > 0 else 0.5
 
+    # Admin/internal hours
     admin_time = df_time[df_time['Project'].str.startswith(tuple(admin_keywords), na=False)]['Logged hrs'].sum()
     pc_time = df_time[df_time['Project'].str.startswith(tuple(pc_keywords), na=False)]['Logged hrs'].sum()
     sales_time = df_time[df_time['Project'].isin(sales_projects)]['Logged hrs'].sum()
     bf_general_hrs = admin_time + all_paid_timeoff_hrs
 
     def split_row(label, base_hrs, pcg_ratio, pcr_ratio, pcg_code, pcr_code):
+        if base_hrs == 0:
+            return pd.DataFrame()  # skip entirely
         b = Decimal(str(base_hrs)).quantize(Decimal('0.0001'))
         pcg = Decimal(str(pcg_ratio)).quantize(Decimal('0.0001'))
         pcr = Decimal(str(pcr_ratio)).quantize(Decimal('0.0001'))
@@ -103,12 +109,11 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             dist_rows.append({'Project': f'BF{bf} General (PCR)', 'Project Code': f'2{bf}000', 'Company': 'PCR', 'Formula': f'={h}*{pcr}'})
     df_sales_split = pd.DataFrame(dist_rows)
 
-    df_regular = df_real.copy()
-    df_regular = df_regular.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Logged hrs'].sum()
-    df_regular = df_regular.rename(columns={'Logged hrs': 'Total hrs'})
-    df_regular['Formula'] = None
+    df_billable = df_billable.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Logged hrs'].sum()
+    df_billable = df_billable.rename(columns={'Logged hrs': 'Total hrs'})
+    df_billable['Formula'] = None
 
-    df_final = pd.concat([df_regular, df_sales_split, df_bf_split], ignore_index=True)
+    df_final = pd.concat([df_billable, df_sales_split, df_bf_split], ignore_index=True)
     df_final = df_final.groupby(['Project', 'Project Code', 'Company', 'Formula'], as_index=False)['Total hrs'].sum()
     df_final['Days'] = df_final['Total hrs'] / 8
 
@@ -170,7 +175,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     output.seek(0)
     return output, person_name, time_period
 
-# Streamlit UI
+# Streamlit App UI
 st.title("Invoice Generator")
 
 st.write("""
