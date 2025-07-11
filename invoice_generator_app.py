@@ -58,10 +58,12 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         else:
             return pd.Series({'Project Code': 'no project code', 'Company': 'no company in project tags'})
 
-    df_billable = df_time[df_time['Project'].fillna('').str.match(r'^\d{2}_')].copy()
-    df_billable[['Project Code', 'Company']] = df_billable.apply(resolve_project_code_and_company, axis=1)
+    # Billable projects input for quota and final export
+    df_billable_input = df_time[df_time['Project'].fillna('').str.match(r'^\d{2}_')].copy()
+    df_billable_input[['Project Code', 'Company']] = df_billable_input.apply(resolve_project_code_and_company, axis=1)
 
-    quota = df_billable.groupby('Company')['Logged hrs'].sum()
+    # Quota based on full data
+    quota = df_billable_input.groupby('Company')['Logged hrs'].sum()
     total_real = quota.sum()
     pcg_ratio = float(quota.get('PCG', 0)) / total_real if total_real > 0 else 0.5
     pcr_ratio = float(quota.get('PCR', 0)) / total_real if total_real > 0 else 0.5
@@ -106,17 +108,23 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             dist_rows.append({'Project': f'BF{bf} General (PCR)', 'Project Code': f'2{bf}000', 'Company': 'PCR', 'Formula': f'={h}*{pcr}'})
     df_sales_split = pd.DataFrame(dist_rows)
 
-    # ✅ Final fix: preserve billables correctly
-    df_billable = df_billable.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Logged hrs'].sum()
+    # Final billable DataFrame for export
+    df_billable = df_billable_input.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Logged hrs'].sum()
     df_billable = df_billable.rename(columns={'Logged hrs': 'Total hrs'})
     df_billable["Formula"] = None
 
     frames = [df_billable, df_sales_split, df_bf_split]
-    frames = [df for df in frames if not df.empty]
+    frames = [df for df in frames if not df.empty and df.dropna(how="all").shape[0] > 0]
     df_final = pd.concat(frames, ignore_index=True)
-    df_final = df_final.groupby(['Project', 'Project Code', 'Company', 'Formula'], as_index=False)['Total hrs'].sum()
+
+    # Deduplicate BFXX General by grouping across keys (not Formula)
+    df_final = df_final.groupby(['Project', 'Project Code', 'Company'], as_index=False).agg({
+        'Total hrs': 'sum',
+        'Formula': 'first'
+    })
     df_final['Days'] = df_final['Total hrs'] / 8
 
+    # --- Excel Output ---
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
