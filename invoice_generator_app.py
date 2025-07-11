@@ -84,6 +84,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     })
 
     df_bf_split = pd.concat([bf_split, pc_split, sales_split], ignore_index=True)
+    df_bf_split = df_bf_split[df_bf_split['Total hrs'] > 0].copy()
 
     # Sales_BF redistribution (from Float)
     df_summary = df_time.groupby('Project', as_index=False)['Logged hrs'].sum()
