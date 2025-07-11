@@ -17,7 +17,6 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     dept_num = re.search(r'\d+', str(dept_raw)).group()
     project_code_map = dict(zip(df_projects['Project'], df_projects['Project code']))
 
-    # Compute total hours per row
     df_time_raw['Total hrs per line'] = (
         df_time_raw['Logged hrs'].fillna(0) +
         df_time_raw['Time off hrs'].fillna(0) +
@@ -25,7 +24,6 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     )
     df_time = df_time_raw[df_time_raw['Total hrs per line'] > 0].copy()
 
-    # Overtime hours
     overtime_hrs = df_time_raw[
         df_time_raw['Time off'].fillna("").str.contains("ausgleich für zusätzliche arbeitszeit", case=False)
     ]['Time off hrs'].sum()
@@ -37,13 +35,11 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         overtime_hrs
     )
 
-    # Parse period from filename
     filename = timesheet_file.name
     match = re.search(r'Table-(\d{8})', filename)
     year, month = match.group(1)[:4], match.group(1)[4:6]
     time_period = datetime.strptime(f"{year}-{month}-01", "%Y-%m-%d").strftime("%B %Y")
 
-    # Setup keywords
     admin_keywords = ['Admin', 'BF coordination', 'IT', 'Finances']
     pc_keywords = ['HR', 'P&C']
     sales_projects = ['Sales I proposal support', 'Tender Screening']
@@ -62,17 +58,15 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         else:
             return pd.Series({'Project Code': 'no project code', 'Company': 'no company in project tags'})
 
-    # Billable projects
     df_billable = df_time[df_time['Project'].fillna('').str.match(r'^\d{2}_')].copy()
     df_billable[['Project Code', 'Company']] = df_billable.apply(resolve_project_code_and_company, axis=1)
+    df_billable["Formula"] = None
 
-    # Quota from billable work
     quota = df_billable.groupby('Company')['Logged hrs'].sum()
     total_real = quota.sum()
     pcg_ratio = float(quota.get('PCG', 0)) / total_real if total_real > 0 else 0.5
     pcr_ratio = float(quota.get('PCR', 0)) / total_real if total_real > 0 else 0.5
 
-    # Internal projects
     admin_time = df_time[df_time['Project'].str.startswith(tuple(admin_keywords), na=False)]['Logged hrs'].sum()
     pc_time = df_time[df_time['Project'].str.startswith(tuple(pc_keywords), na=False)]['Logged hrs'].sum()
     sales_time = df_time[df_time['Project'].isin(sales_projects)]['Logged hrs'].sum()
@@ -98,7 +92,6 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         split_row('Sales', sales_time, pcg_ratio, pcr_ratio, '199300', '299300')
     ], ignore_index=True)
 
-    # Distribute Marketing_BF / Sales_BF
     df_summary = df_time.groupby('Project', as_index=False)['Logged hrs'].sum()
     df_bf_dist = df_summary[df_summary['Project'].str.match(r'^(Sales_BF|Marketing_BF)\d{2}', na=False)].copy()
 
@@ -114,21 +107,15 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             dist_rows.append({'Project': f'BF{bf} General (PCR)', 'Project Code': f'2{bf}000', 'Company': 'PCR', 'Formula': f'={h}*{pcr}'})
     df_sales_split = pd.DataFrame(dist_rows)
 
-    # Finalize billable
-    df_billable = df_billable.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Logged hrs'].sum()
+    df_billable = df_billable.groupby(['Project', 'Project Code', 'Company', 'Formula'], as_index=False)['Logged hrs'].sum()
     df_billable = df_billable.rename(columns={'Logged hrs': 'Total hrs'})
-    df_billable['Formula'] = None
 
-    # Combine all (filter empty to avoid warnings)
     frames = [df_billable, df_sales_split, df_bf_split]
     frames = [df for df in frames if not df.empty]
     df_final = pd.concat(frames, ignore_index=True)
     df_final = df_final.groupby(['Project', 'Project Code', 'Company', 'Formula'], as_index=False)['Total hrs'].sum()
     df_final['Days'] = df_final['Total hrs'] / 8
 
-    df_unmatched = df_final[df_final['Company'] == 'no company in project tags']
-
-    # Excel output
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
@@ -167,12 +154,6 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
 
     r, pcg_sub = write_table(df_final[df_final['Company'] == 'PCG'], 12, "PCG Projects")
     r, pcr_sub = write_table(df_final[df_final['Company'] == 'PCR'], r, "PCR Projects")
-
-    if not df_unmatched.empty:
-        r, _ = write_table(df_unmatched, r, "Unmatched Projects")
-        ws[f"E{r}"] = "⚠️ Note:"; ws[f"E{r}"].font = Font(bold=True)
-        ws[f"F{r}"] = "These projects lack company tags or codes and are excluded from totals"
-
     ws[f"E{r+2}"] = "Grand Total:"; ws[f"E{r+2}"].font = Font(bold=True)
     ws[f"F{r+2}"] = f"=F{pcg_sub}+F{pcr_sub}"; ws[f"F{r+2}"].number_format = u'€#,##0.00'; ws[f"F{r+2}"].font = Font(bold=True)
 
@@ -185,13 +166,13 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     output.seek(0)
     return output, person_name, time_period
 
-# Streamlit app UI
+# --- Streamlit UI ---
 st.title("Invoice Generator")
 
 st.write("""
 1. Go to Float and select your name and the relevant month.
 2. Set the view to **Person** and export the **Table Data** CSV.
-3. Then switch to **Projects** view and export the **Project Table Data** CSV.
+3. Switch to **Projects** view and export the **Project Table Data** CSV.
 4. Upload both files below, input your salary, and generate your invoice.
 """)
 
@@ -203,5 +184,4 @@ with st.form("input_form"):
 
 if generate_button and timesheet_file and projects_file and monthly_salary > 0:
     result, person_name, time_period = generate_invoice(timesheet_file, projects_file, monthly_salary)
-    if result:
-        st.download_button("Download Invoice", result, file_name=f"Invoice_{person_name}_{time_period}.xlsx")
+    st.download_button("Download Invoice", result, file_name=f"Invoice_{person_name}_{time_period}.xlsx")
