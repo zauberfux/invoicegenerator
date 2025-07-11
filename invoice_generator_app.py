@@ -6,6 +6,7 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font
+from decimal import Decimal, ROUND_HALF_UP
 
 def generate_invoice(timesheet_file, projects_file, monthly_salary):
     df_time_raw = pd.read_csv(timesheet_file)
@@ -39,69 +40,9 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     year, month = match.group(1)[:4], match.group(1)[4:6]
     time_period = datetime.strptime(f"{year}-{month}-01", "%Y-%m-%d").strftime("%B %Y")
 
-    # Admin and allocation projects
     admin_keywords = ['Admin', 'BF coordination', 'IT', 'Finances']
     pc_keywords = ['HR', 'P&C']
     sales_projects = ['Sales I proposal support', 'Tender Screening']
-
-    admin_time_own_bf = df_time[
-        df_time['Project'].str.startswith(tuple(admin_keywords), na=False)
-    ]['Logged hrs'].fillna(0).sum()
-
-    pc_time = df_time[
-        df_time['Project'].str.startswith(tuple(pc_keywords), na=False)
-    ]['Logged hrs'].fillna(0).sum()
-
-    sales_time = df_time[
-        df_time['Project'].isin(sales_projects)
-    ]['Logged hrs'].fillna(0).sum()
-
-    bf_general_hours = admin_time_own_bf + all_paid_timeoff_hrs
-
-    bf_split = pd.DataFrame({
-        'Project': [f'BF{dept_num} General (PCG)', f'BF{dept_num} General (PCR)'],
-        'Total hrs': [bf_general_hours / 2, bf_general_hours / 2],
-        'Project Code': [f'1{dept_num}000', f'2{dept_num}000'],
-        'Company': ['PCG', 'PCR']
-    })
-
-    pc_split = pd.DataFrame({
-        'Project': ['People & Culture (PCG)', 'People & Culture (PCR)'],
-        'Total hrs': [pc_time / 2, pc_time / 2],
-        'Project Code': ['199500', '299500'],
-        'Company': ['PCG', 'PCR']
-    })
-
-    sales_split = pd.DataFrame({
-        'Project': ['Sales (PCG)', 'Sales (PCR)'],
-        'Total hrs': [sales_time / 2, sales_time / 2],
-        'Project Code': ['199300', '299300'],
-        'Company': ['PCG', 'PCR']
-    })
-
-    df_bf_split = pd.concat([bf_split, pc_split, sales_split], ignore_index=True)
-    df_bf_split = df_bf_split[df_bf_split['Total hrs'] > 0].copy()
-
-    # ✅ NEW: include Sales_BF and Marketing_BF projects
-    df_summary = df_time.groupby('Project', as_index=False)['Logged hrs'].sum()
-    df_sales = df_summary[
-        df_summary['Project'].str.match(r'^(Sales_BF|Marketing_BF)\d{2}', na=False)
-    ].copy()
-
-    sales_rows = []
-    for _, row in df_sales.iterrows():
-        match = re.search(r'(Sales_BF|Marketing_BF)(\d{2})', row['Project'])
-        if match:
-            bf = match.group(2)
-            hrs = row['Logged hrs'] / 2
-            sales_rows.extend([
-                {'Project': f'BF{bf} General (PCG)', 'Total hrs': hrs, 'Project Code': f'1{bf}000', 'Company': 'PCG'},
-                {'Project': f'BF{bf} General (PCR)', 'Total hrs': hrs, 'Project Code': f'2{bf}000', 'Company': 'PCR'}
-            ])
-    df_sales_split = pd.DataFrame(sales_rows)
-
-    # Regular project work
-    df_regular = df_time[df_time['Project'].fillna("").str.match(r"^\d{2}_")].copy()
 
     def resolve_project_code_and_company(row):
         project = row['Project']
@@ -117,17 +58,62 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         else:
             return pd.Series({'Project Code': 'no project code', 'Company': 'no company in project tags'})
 
-    df_regular[['Project Code', 'Company']] = df_regular.apply(resolve_project_code_and_company, axis=1)
+    df_real = df_time[df_time['Project'].fillna('').str.match(r'^\d{2}_')].copy()
+    df_real[['Project Code', 'Company']] = df_real.apply(resolve_project_code_and_company, axis=1)
+    quota = df_real.groupby('Company')['Logged hrs'].sum()
+    total_real = quota.sum()
+    pcg_ratio = float(quota.get('PCG', 0)) / total_real if total_real > 0 else 0.5
+    pcr_ratio = float(quota.get('PCR', 0)) / total_real if total_real > 0 else 0.5
+
+    admin_time = df_time[df_time['Project'].str.startswith(tuple(admin_keywords), na=False)]['Logged hrs'].sum()
+    pc_time = df_time[df_time['Project'].str.startswith(tuple(pc_keywords), na=False)]['Logged hrs'].sum()
+    sales_time = df_time[df_time['Project'].isin(sales_projects)]['Logged hrs'].sum()
+    bf_general_hrs = admin_time + all_paid_timeoff_hrs
+
+    def split_row(label, base_hrs, pcg_ratio, pcr_ratio, pcg_code, pcr_code):
+        b = Decimal(str(base_hrs)).quantize(Decimal('0.0001'))
+        pcg = Decimal(str(pcg_ratio)).quantize(Decimal('0.0001'))
+        pcr = Decimal(str(pcr_ratio)).quantize(Decimal('0.0001'))
+        return pd.DataFrame({
+            'Project': [f'{label} (PCG)', f'{label} (PCR)'],
+            'Total hrs': [None, None],
+            'Project Code': [pcg_code, pcr_code],
+            'Company': ['PCG', 'PCR'],
+            'Formula': [f'={b}*{pcg}'.replace('.', ','), f'={b}*{pcr}'.replace('.', ',')]
+        })
+
+    df_bf_split = pd.concat([
+        split_row(f'BF{dept_num} General', bf_general_hrs, pcg_ratio, pcr_ratio, f'1{dept_num}000', f'2{dept_num}000'),
+        split_row('People & Culture', pc_time, pcg_ratio, pcr_ratio, '199500', '299500'),
+        split_row('Sales', sales_time, pcg_ratio, pcr_ratio, '199300', '299300')
+    ], ignore_index=True)
+
+    df_summary = df_time.groupby('Project', as_index=False)['Logged hrs'].sum()
+    df_bf_dist = df_summary[df_summary['Project'].str.match(r'^(Sales_BF|Marketing_BF)\d{2}', na=False)].copy()
+
+    dist_rows = []
+    for _, row in df_bf_dist.iterrows():
+        bf_match = re.search(r'(?:Sales_BF|Marketing_BF)(\d{2})', row['Project'])
+        if bf_match:
+            bf = bf_match.group(1)
+            h = Decimal(str(row['Logged hrs'])).quantize(Decimal('0.0001'))
+            pcg = Decimal(str(pcg_ratio)).quantize(Decimal('0.0001'))
+            pcr = Decimal(str(pcr_ratio)).quantize(Decimal('0.0001'))
+            dist_rows.append({'Project': f'BF{bf} General (PCG)', 'Project Code': f'1{bf}000', 'Company': 'PCG', 'Formula': f'={h}*{pcg}'.replace('.', ',')})
+            dist_rows.append({'Project': f'BF{bf} General (PCR)', 'Project Code': f'2{bf}000', 'Company': 'PCR', 'Formula': f'={h}*{pcr}'.replace('.', ',')})
+    df_sales_split = pd.DataFrame(dist_rows)
+
+    df_regular = df_real.copy()
     df_regular = df_regular.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Logged hrs'].sum()
     df_regular = df_regular.rename(columns={'Logged hrs': 'Total hrs'})
+    df_regular['Formula'] = None
 
     df_final = pd.concat([df_regular, df_sales_split, df_bf_split], ignore_index=True)
-    df_final = df_final.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Total hrs'].sum()
+    df_final = df_final.groupby(['Project', 'Project Code', 'Company', 'Formula'], as_index=False)['Total hrs'].sum()
     df_final['Days'] = df_final['Total hrs'] / 8
 
     df_unmatched = df_final[df_final['Company'] == 'no company in project tags']
 
-    # Excel export
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
@@ -149,21 +135,23 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             cell.font = Font(bold=True)
         start_row += 2
         for _, row in df.iterrows():
-            ws.append([row['Project Code'], row['Project'], row['Total hrs']])
+            ws.append([row['Project Code'], row['Project'], None])
         data_start = start_row
         data_end = start_row + len(df) - 1
-        for r in range(data_start, data_end+1):
-            ws[f"D{r}"] = f"=C{r}/8"
-            ws[f"E{r}"] = "=$B$8"; ws[f"E{r}"].number_format = u'€#,##0.00'
-            ws[f"F{r}"] = f"=D{r}*E{r}"; ws[f"F{r}"].number_format = u'€#,##0.00'
+        for i, (_, row) in enumerate(df.iterrows(), start=data_start):
+            formula = row['Formula'] if pd.notna(row['Formula']) else None
+            ws[f"C{i}"] = formula if formula else row['Total hrs']
+            ws[f"D{i}"] = f"=C{i}/8"
+            ws[f"E{i}"] = "=$B$8"; ws[f"E{i}"].number_format = u'€#,##0.00'
+            ws[f"F{i}"] = f"=D{i}*E{i}"; ws[f"F{i}"].number_format = u'€#,##0.00'
         ws[f"E{data_end+1}"] = "Subtotal:"; ws[f"E{data_end+1}"].font = Font(bold=True)
         ws[f"F{data_end+1}"] = f"=SUM(F{data_start}:F{data_end})"
         ws[f"F{data_end+1}"].number_format = u'€#,##0.00'
         ws[f"F{data_end+1}"].font = Font(bold=True)
         return data_end + 3, data_end + 1
 
-    r, pcg_subtotal = write_table(df_final[df_final['Company'] == 'PCG'], 12, "PCG Projects")
-    r, pcr_subtotal = write_table(df_final[df_final['Company'] == 'PCR'], r, "PCR Projects")
+    r, pcg_sub = write_table(df_final[df_final['Company'] == 'PCG'], 12, "PCG Projects")
+    r, pcr_sub = write_table(df_final[df_final['Company'] == 'PCR'], r, "PCR Projects")
 
     if not df_unmatched.empty:
         r, _ = write_table(df_unmatched, r, "Unmatched Projects")
@@ -171,7 +159,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         ws[f"F{r}"] = "These projects lack company tags or codes and are excluded from totals"
 
     ws[f"E{r+2}"] = "Grand Total:"; ws[f"E{r+2}"].font = Font(bold=True)
-    ws[f"F{r+2}"] = f"=F{pcg_subtotal}+F{pcr_subtotal}"; ws[f"F{r+2}"].number_format = u'€#,##0.00'; ws[f"F{r+2}"].font = Font(bold=True)
+    ws[f"F{r+2}"] = f"=F{pcg_sub}+F{pcr_sub}"; ws[f"F{r+2}"].number_format = u'€#,##0.00'; ws[f"F{r+2}"].font = Font(bold=True)
 
     for col in ws.columns:
         width = max(len(str(cell.value)) if cell.value else 0 for cell in col) + 2
@@ -182,7 +170,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     output.seek(0)
     return output, person_name, time_period
 
-# --- Streamlit UI ---
+# --- Streamlit App UI ---
 st.title("Invoice Generator")
 
 st.write("""
@@ -200,4 +188,5 @@ with st.form("input_form"):
 
 if generate_button and timesheet_file and projects_file and monthly_salary > 0:
     result, person_name, time_period = generate_invoice(timesheet_file, projects_file, monthly_salary)
-    st.download_button("Download Invoice", result, file_name=f"Invoice_{person_name}_{time_period}.xlsx")
+    if result:
+        st.download_button("Download Invoice", result, file_name=f"Invoice_{person_name}_{time_period}.xlsx")
