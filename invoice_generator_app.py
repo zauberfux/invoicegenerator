@@ -29,7 +29,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         df_time_raw['Time off'].fillna("").str.contains("ausgleich für zusätzliche arbeitszeit", case=False)
     ]['Time off hrs'].sum()
 
-    # Corrected: Include all actual time
+    # Total hours and time-off
     all_logged_hrs = df_time_raw['Logged hrs'].sum()
     all_paid_timeoff_hrs = (
         df_time_raw['Time off hrs'].sum() +
@@ -43,21 +43,49 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     year, month = match.group(1)[:4], match.group(1)[4:6]
     time_period = datetime.strptime(f"{year}-{month}-01", "%Y-%m-%d").strftime("%B %Y")
 
-    # Admin/internal hours
-    admin_keywords = ['Admin', 'BF coordination', 'HR', 'IT', 'Finances']
+    # Split logic for BF General, People & Culture, and Sales Support
+    admin_keywords = ['Admin', 'BF coordination', 'IT', 'Finances']
+    pc_keywords = ['HR', 'P&C']
+    sales_projects = ['Sales I proposal support', 'Tender Screening']
+
     admin_time_own_bf = df_time[
         df_time['Project'].str.startswith(tuple(admin_keywords), na=False)
     ]['Logged hrs'].fillna(0).sum()
 
+    pc_time = df_time[
+        df_time['Project'].str.startswith(tuple(pc_keywords), na=False)
+    ]['Logged hrs'].fillna(0).sum()
+
+    sales_time = df_time[
+        df_time['Project'].isin(sales_projects)
+    ]['Logged hrs'].fillna(0).sum()
+
     bf_general_hours = admin_time_own_bf + all_paid_timeoff_hrs
-    df_bf_split = pd.DataFrame({
+
+    bf_split = pd.DataFrame({
         'Project': [f'BF{dept_num} General (PCG)', f'BF{dept_num} General (PCR)'],
         'Total hrs': [bf_general_hours / 2, bf_general_hours / 2],
         'Project Code': [f'1{dept_num}000', f'2{dept_num}000'],
         'Company': ['PCG', 'PCR']
     })
 
-    # Sales split
+    pc_split = pd.DataFrame({
+        'Project': ['People & Culture (PCG)', 'People & Culture (PCR)'],
+        'Total hrs': [pc_time / 2, pc_time / 2],
+        'Project Code': ['199500', '299500'],
+        'Company': ['PCG', 'PCR']
+    })
+
+    sales_split = pd.DataFrame({
+        'Project': ['Sales (PCG)', 'Sales (PCR)'],
+        'Total hrs': [sales_time / 2, sales_time / 2],
+        'Project Code': ['199300', '299300'],
+        'Company': ['PCG', 'PCR']
+    })
+
+    df_bf_split = pd.concat([bf_split, pc_split, sales_split], ignore_index=True)
+
+    # Sales_BF redistribution (from Float)
     df_summary = df_time.groupby('Project', as_index=False)['Logged hrs'].sum()
     df_sales = df_summary[df_summary['Project'].str.startswith('Sales_BF', na=False)].copy()
     sales_rows = []
@@ -72,7 +100,7 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             ])
     df_sales_split = pd.DataFrame(sales_rows)
 
-    # Regular projects
+    # Regular projects with two-digit prefix
     df_regular = df_time[df_time['Project'].fillna("").str.match(r"^\d{2}_")].copy()
 
     def resolve_project_code_and_company(row):
@@ -93,14 +121,14 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     df_regular = df_regular.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Logged hrs'].sum()
     df_regular = df_regular.rename(columns={'Logged hrs': 'Total hrs'})
 
-    # Combine all
+    # Combine all data
     df_final = pd.concat([df_regular, df_sales_split, df_bf_split], ignore_index=True)
     df_final = df_final.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Total hrs'].sum()
     df_final['Days'] = df_final['Total hrs'] / 8
 
-    # Unmatched projects
     df_unmatched = df_final[df_final['Company'] == 'no company in project tags']
 
+    # Excel export
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
