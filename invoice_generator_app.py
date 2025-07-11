@@ -60,7 +60,6 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
 
     df_billable = df_time[df_time['Project'].fillna('').str.match(r'^\d{2}_')].copy()
     df_billable[['Project Code', 'Company']] = df_billable.apply(resolve_project_code_and_company, axis=1)
-    df_billable["Formula"] = None
 
     quota = df_billable.groupby('Company')['Logged hrs'].sum()
     total_real = quota.sum()
@@ -107,8 +106,10 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
             dist_rows.append({'Project': f'BF{bf} General (PCR)', 'Project Code': f'2{bf}000', 'Company': 'PCR', 'Formula': f'={h}*{pcr}'})
     df_sales_split = pd.DataFrame(dist_rows)
 
-    df_billable = df_billable.groupby(['Project', 'Project Code', 'Company', 'Formula'], as_index=False)['Logged hrs'].sum()
+    # ✅ Final fix: preserve billables correctly
+    df_billable = df_billable.groupby(['Project', 'Project Code', 'Company'], as_index=False)['Logged hrs'].sum()
     df_billable = df_billable.rename(columns={'Logged hrs': 'Total hrs'})
+    df_billable["Formula"] = None
 
     frames = [df_billable, df_sales_split, df_bf_split]
     frames = [df for df in frames if not df.empty]
@@ -170,10 +171,9 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
 st.title("Invoice Generator")
 
 st.write("""
-1. Go to Float and select your name and the relevant month.
-2. Set the view to **Person** and export the **Table Data** CSV.
-3. Switch to **Projects** view and export the **Project Table Data** CSV.
-4. Upload both files below, input your salary, and generate your invoice.
+1. Export your Float data: first Person view, then Project view.
+2. Upload both CSVs below, enter your monthly salary.
+3. Click generate to download your invoice.
 """)
 
 with st.form("input_form"):
