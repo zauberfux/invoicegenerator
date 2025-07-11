@@ -29,11 +29,13 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
         df_time_raw['Time off'].fillna("").str.contains("ausgleich für zusätzliche arbeitszeit", case=False)
     ]['Time off hrs'].sum()
 
-    all_logged_hrs = df_time_raw[df_time_raw['Project'] == 'All']['Logged hrs'].sum()
+    all_logged_hrs = df_time_raw['Logged hrs'].sum()
     all_paid_timeoff_hrs = (
-        df_time_raw[df_time_raw['Project'] == 'All']['Time off hrs'].sum() +
-        df_time_raw[df_time_raw['Project'] == 'All']['Holiday hrs'].sum() -
-        overtime_hrs
+    df_time_raw['Time off hrs'].sum() +
+    df_time_raw['Holiday hrs'].sum() -
+    overtime_hrs
+)
+
     )
 
     # Time period
