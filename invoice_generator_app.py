@@ -36,8 +36,6 @@ def generate_invoice(timesheet_file, projects_file, monthly_salary):
     overtime_hrs
     )
 
-    )
-
     # Time period
     filename = timesheet_file.name
     match = re.search(r'Table-(\d{8})', filename)
