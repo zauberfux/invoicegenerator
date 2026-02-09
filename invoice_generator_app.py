@@ -16,7 +16,7 @@ from openpyxl.utils import get_column_letter
 # CONFIG
 # =============================================================================
 
-DEFAULT_BUSINESS_FIELD = "00"   # user edits in Excel (B2)
+DEFAULT_BUSINESS_FIELD = "40"   # user edits in Excel (B2)
 HOURS_PER_DAY = 8
 EUR_FORMAT = u"€#,##0.00"
 USER_INPUT_FILL = PatternFill(start_color="D9EAF7", end_color="D9EAF7", fill_type="solid")  # light blue
@@ -330,3 +330,4 @@ Please don’t count **"Ausgleich für zusätzliche Arbeitszeit"**, as this is a
     except Exception as e:
         st.error("Could not process this file.")
         st.exception(e)
+
