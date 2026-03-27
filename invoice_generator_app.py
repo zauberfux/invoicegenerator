@@ -35,12 +35,10 @@ class FileMeta:
     person_name: str
     start_date: Optional[datetime]
     end_date: Optional[datetime]
-    # used for filename (keep legacy behavior: Month Year if same month)
     time_period_label: str
 
     @property
     def time_period_field(self) -> str:
-        # shown in Excel cell B3: always exact from–to if parseable
         if not self.start_date or not self.end_date:
             return self.time_period_label
         return f"{self.start_date.strftime('%Y-%m-%d')} to {self.end_date.strftime('%Y-%m-%d')}"
@@ -65,7 +63,6 @@ def parse_filename_meta(filename: str) -> FileMeta:
     start_dt = datetime.strptime(m.group("start"), "%Y%m%d")
     end_dt = datetime.strptime(m.group("end"), "%Y%m%d")
 
-    # keep filename behavior: if same month => "January 2026", else from-to
     if start_dt.year == end_dt.year and start_dt.month == end_dt.month:
         period_label = start_dt.strftime("%B %Y")
     else:
@@ -80,7 +77,6 @@ def parse_filename_meta(filename: str) -> FileMeta:
 
 
 def excel_num_invariant(x: float) -> str:
-    """XLSX formulas are locale-independent. Use dot decimals always."""
     return f"{x:.10f}".rstrip("0").rstrip(".")
 
 
@@ -95,13 +91,12 @@ def company_from_project_code_str(code_str: str) -> str:
 
 def is_missing_code(code_str: str) -> bool:
     s = (code_str or "").strip()
-    if s == "":
+    if s in {"", "0"}:
         return True
     return not re.fullmatch(r"\d+", s)
 
 
 def display_len_for_autosize(v) -> int:
-    # prevent long formulas from making columns huge
     if v is None:
         return 0
     if isinstance(v, str) and v.startswith("="):
@@ -159,11 +154,10 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
     if missing:
         raise ValueError(f"CSV missing required columns: {sorted(missing)}")
 
-    # normalize
     df = df.copy()
     df["Project code str"] = df["Project code"].fillna("").str.strip()
-    df["Logged Billable hours"] = df["Logged Billable hours"].fillna(0).astype(float)
-    df["Logged Non-billable hours"] = df["Logged Non-billable hours"].fillna(0).astype(float)
+    df["Logged Billable hours"] = pd.to_numeric(df["Logged Billable hours"], errors="coerce").fillna(0.0)
+    df["Logged Non-billable hours"] = pd.to_numeric(df["Logged Non-billable hours"], errors="coerce").fillna(0.0)
 
     total_billable_hrs = float(df["Logged Billable hours"].sum())
     total_nonbillable_hrs_logged = float(df["Logged Non-billable hours"].sum())
@@ -180,7 +174,6 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
     )
     denom = pcg_billable_hrs + pcr_billable_hrs
 
-    # billable-only project listing (avoid double counting)
     billable = (
         df.groupby(["Project code str", "Project"], as_index=False)["Logged Billable hours"]
         .sum()
@@ -203,9 +196,8 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
     other = billable[
         (billable["code_missing"])
         & (billable["Logged hrs"] > 0)
-    ].copy()  # billable but no usable code
+    ].copy()
 
-    # keep project codes as text identifiers; do not cast to int
     pcg["Project code"] = pcg["Project code str"]
     pcr["Project code"] = pcr["Project code str"]
     other["Project code"] = ""
@@ -214,7 +206,6 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
     pcr = pcr[["Project code", "Project", "Logged hrs"]]
     other = other[["Project code", "Project", "Logged hrs"]]
 
-    # BF General rows allocate: logged nonbillable + PTO(B6+B7+B8) split by billable share (or 50/50 if denom==0)
     PTO_SUM = "(B6+B7+B8)"
     lnb = excel_num_invariant(total_nonbillable_hrs_logged)
     pcg_b = excel_num_invariant(pcg_billable_hrs)
@@ -241,7 +232,6 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
     pcg = pd.concat([pcg, pd.DataFrame([bf_pcg_row])], ignore_index=True)
     pcr = pd.concat([pcr, pd.DataFrame([bf_pcr_row])], ignore_index=True)
 
-    # sort BF General last
     def is_bf_general(v) -> int:
         return 1 if isinstance(v, str) and "BF" in v and "General" in v else 0
 
@@ -250,17 +240,14 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
     pcg = pcg.sort_values(["_bf", "Project code", "Project"], kind="stable").drop(columns=["_bf"])
     pcr = pcr.sort_values(["_bf", "Project code", "Project"], kind="stable").drop(columns=["_bf"])
 
-    # --- workbook ---
     wb = Workbook()
     ws = wb.active
     ws.title = "Invoice"
 
     ws["A1"] = "Name:"
     ws["B1"] = meta.person_name
-
     ws["A2"] = "Business Field:"
     ws["B2"] = DEFAULT_BUSINESS_FIELD
-
     ws["A3"] = "Time Period:"
     ws["B3"] = meta.time_period_field
 
@@ -273,16 +260,13 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
 
     ws["A6"] = "Paid vacation hrs:"
     ws["B6"] = 0.0
-
     ws["A7"] = "Paid sick leave hrs:"
     ws["B7"] = 0.0
-
     ws["A8"] = "Paid public holiday hrs:"
     ws["B8"] = 0.0
 
     ws["A9"] = "Paid Time-off Days:"
     ws["B9"] = f"=(B6+B7+B8)/{HOURS_PER_DAY}"
-
     ws["A10"] = "Total days:"
     ws["B10"] = "=B5+B9"
 
@@ -290,7 +274,6 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
     ws["B11"] = "=B4/B10"
     ws["B11"].number_format = EUR_FORMAT
 
-    # mark user-fill cells blue
     for addr in ("B2", "B4", "B6", "B7", "B8"):
         ws[addr].fill = USER_INPUT_FILL
 
@@ -316,7 +299,6 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
 
 
 def make_output_filename(meta: FileMeta) -> str:
-    # keep existing naming behavior (do NOT change the period style here)
     out_name_safe = re.sub(r"[^A-Za-z0-9_-]+", "_", meta.person_name).strip("_")
     out_period_safe = re.sub(r"[^A-Za-z0-9_-]+", "_", meta.time_period_label).strip("_")
     return f"Invoice_{out_name_safe}_{out_period_safe}.xlsx"
@@ -342,10 +324,13 @@ if uploaded is not None:
     try:
         meta = parse_filename_meta(uploaded.name)
 
-        # Root-cause fix: preserve project codes as text at ingestion time.
+        # Preserve project codes as text
         df = pd.read_csv(uploaded, dtype={"Project code": "string"})
 
-        # Light validation early to give immediate feedback
+        # Keep only actual time-entry rows; discard footer/summary rows like:
+        # Total, Date range, Tasks, People, and blanks
+        df = df[df["Date"].astype("string").str.fullmatch(r"\d{4}-\d{2}-\d{2}", na=False)].copy()
+
         required = {"Project", "Project code", "Logged Billable hours", "Logged Non-billable hours"}
         missing = required - set(df.columns)
         if missing:
@@ -353,7 +338,14 @@ if uploaded is not None:
             st.caption("Columns found:")
             st.code(", ".join(df.columns.astype(str).tolist()))
         else:
-            st.success(f"Loaded: {meta.person_name} — {meta.time_period_field}")
+            billable = pd.to_numeric(df["Logged Billable hours"], errors="coerce").fillna(0.0).sum()
+            non_billable = pd.to_numeric(df["Logged Non-billable hours"], errors="coerce").fillna(0.0).sum()
+            total = billable + non_billable
+
+            st.success(
+                f"Loaded: {meta.person_name} — {meta.time_period_field} "
+                f"(Billable: {billable:.2f} hrs, Non-billable: {non_billable:.2f} hrs, Total: {total:.2f} hrs)"
+            )
 
             with st.form("generate_form"):
                 generate = st.form_submit_button("Generate")
