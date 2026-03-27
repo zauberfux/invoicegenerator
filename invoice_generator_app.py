@@ -19,7 +19,11 @@ from openpyxl.utils import get_column_letter
 DEFAULT_BUSINESS_FIELD = "40"   # user edits in Excel (B2)
 HOURS_PER_DAY = 8
 EUR_FORMAT = u"€#,##0.00"
-USER_INPUT_FILL = PatternFill(start_color="D9EAF7", end_color="D9EAF7", fill_type="solid")  # light blue
+USER_INPUT_FILL = PatternFill(
+    start_color="D9EAF7",
+    end_color="D9EAF7",
+    fill_type="solid",
+)  # light blue
 
 
 # =============================================================================
@@ -50,7 +54,12 @@ def parse_filename_meta(filename: str) -> FileMeta:
     stem = Path(filename).stem
     m = re.match(r"^(?P<person>.+?)-LoggedTime-(?P<start>\d{8})-(?P<end>\d{8})$", stem)
     if not m:
-        return FileMeta(person_name=stem, start_date=None, end_date=None, time_period_label="Unknown period")
+        return FileMeta(
+            person_name=stem,
+            start_date=None,
+            end_date=None,
+            time_period_label="Unknown period",
+        )
 
     person = m.group("person").strip()
     start_dt = datetime.strptime(m.group("start"), "%Y%m%d")
@@ -62,7 +71,12 @@ def parse_filename_meta(filename: str) -> FileMeta:
     else:
         period_label = f"{start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')}"
 
-    return FileMeta(person_name=person, start_date=start_dt, end_date=end_dt, time_period_label=period_label)
+    return FileMeta(
+        person_name=person,
+        start_date=start_dt,
+        end_date=end_dt,
+        time_period_label=period_label,
+    )
 
 
 def excel_num_invariant(x: float) -> str:
@@ -146,7 +160,8 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
         raise ValueError(f"CSV missing required columns: {sorted(missing)}")
 
     # normalize
-    df["Project code str"] = df["Project code"].astype("string").fillna("").str.strip()
+    df = df.copy()
+    df["Project code str"] = df["Project code"].fillna("").str.strip()
     df["Logged Billable hours"] = df["Logged Billable hours"].fillna(0).astype(float)
     df["Logged Non-billable hours"] = df["Logged Non-billable hours"].fillna(0).astype(float)
 
@@ -157,8 +172,12 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
     df["code_missing"] = df["Project code str"].apply(is_missing_code)
     df["Company"] = df["Project code str"].apply(company_from_project_code_str)
 
-    pcg_billable_hrs = float(df.loc[(df["Company"] == "PCG") & (~df["code_missing"]), "Logged Billable hours"].sum())
-    pcr_billable_hrs = float(df.loc[(df["Company"] == "PCR") & (~df["code_missing"]), "Logged Billable hours"].sum())
+    pcg_billable_hrs = float(
+        df.loc[(df["Company"] == "PCG") & (~df["code_missing"]), "Logged Billable hours"].sum()
+    )
+    pcr_billable_hrs = float(
+        df.loc[(df["Company"] == "PCR") & (~df["code_missing"]), "Logged Billable hours"].sum()
+    )
     denom = pcg_billable_hrs + pcr_billable_hrs
 
     # billable-only project listing (avoid double counting)
@@ -171,12 +190,24 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
     billable["code_missing"] = billable["Project code str"].apply(is_missing_code)
     billable["Company"] = billable["Project code str"].apply(company_from_project_code_str)
 
-    pcg = billable[(billable["Company"] == "PCG") & (~billable["code_missing"]) & (billable["Logged hrs"] > 0)].copy()
-    pcr = billable[(billable["Company"] == "PCR") & (~billable["code_missing"]) & (billable["Logged hrs"] > 0)].copy()
-    other = billable[(billable["code_missing"]) & (billable["Logged hrs"] > 0)].copy()  # billable but no usable code
+    pcg = billable[
+        (billable["Company"] == "PCG")
+        & (~billable["code_missing"])
+        & (billable["Logged hrs"] > 0)
+    ].copy()
+    pcr = billable[
+        (billable["Company"] == "PCR")
+        & (~billable["code_missing"])
+        & (billable["Logged hrs"] > 0)
+    ].copy()
+    other = billable[
+        (billable["code_missing"])
+        & (billable["Logged hrs"] > 0)
+    ].copy()  # billable but no usable code
 
-    pcg["Project code"] = pcg["Project code str"].astype(int)
-    pcr["Project code"] = pcr["Project code str"].astype(int)
+    # keep project codes as text identifiers; do not cast to int
+    pcg["Project code"] = pcg["Project code str"]
+    pcr["Project code"] = pcr["Project code str"]
     other["Project code"] = ""
 
     pcg = pcg[["Project code", "Project", "Logged hrs"]]
@@ -224,24 +255,39 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
     ws = wb.active
     ws.title = "Invoice"
 
-    ws["A1"] = "Name:"; ws["B1"] = meta.person_name
-    ws["A2"] = "Business Field:"; ws["B2"] = DEFAULT_BUSINESS_FIELD
-    ws["A3"] = "Time Period:"; ws["B3"] = meta.time_period_field
+    ws["A1"] = "Name:"
+    ws["B1"] = meta.person_name
 
-    ws["A4"] = "Monthly Salary:"; ws["B4"] = 0.0
+    ws["A2"] = "Business Field:"
+    ws["B2"] = DEFAULT_BUSINESS_FIELD
+
+    ws["A3"] = "Time Period:"
+    ws["B3"] = meta.time_period_field
+
+    ws["A4"] = "Monthly Salary:"
+    ws["B4"] = 0.0
     ws["B4"].number_format = EUR_FORMAT
 
     ws["A5"] = "Number of Days Worked:"
     ws["B5"] = f"=({excel_num_invariant(total_logged_hrs)})/{HOURS_PER_DAY}"
 
-    ws["A6"] = "Paid vacation hrs:"; ws["B6"] = 0.0
-    ws["A7"] = "Paid sick leave hrs:"; ws["B7"] = 0.0
-    ws["A8"] = "Paid public holiday hrs:"; ws["B8"] = 0.0
+    ws["A6"] = "Paid vacation hrs:"
+    ws["B6"] = 0.0
 
-    ws["A9"] = "Paid Time-off Days:"; ws["B9"] = f"=(B6+B7+B8)/{HOURS_PER_DAY}"
-    ws["A10"] = "Total days:"; ws["B10"] = "=B5+B9"
+    ws["A7"] = "Paid sick leave hrs:"
+    ws["B7"] = 0.0
 
-    ws["A11"] = "Day Rate:"; ws["B11"] = "=B4/B10"
+    ws["A8"] = "Paid public holiday hrs:"
+    ws["B8"] = 0.0
+
+    ws["A9"] = "Paid Time-off Days:"
+    ws["B9"] = f"=(B6+B7+B8)/{HOURS_PER_DAY}"
+
+    ws["A10"] = "Total days:"
+    ws["B10"] = "=B5+B9"
+
+    ws["A11"] = "Day Rate:"
+    ws["B11"] = "=B4/B10"
     ws["B11"].number_format = EUR_FORMAT
 
     # mark user-fill cells blue
@@ -255,7 +301,8 @@ def build_invoice_xlsx_bytes(df: pd.DataFrame, meta: FileMeta) -> BytesIO:
 
     subs = [x for x in [pcg_sub, pcr_sub, oth_sub] if x is not None]
     if subs:
-        ws[f"E{row}"] = "Grand Total:"; ws[f"E{row}"].font = Font(bold=True)
+        ws[f"E{row}"] = "Grand Total:"
+        ws[f"E{row}"].font = Font(bold=True)
         ws[f"F{row}"] = "=" + "+".join([f"F{s}" for s in subs])
         ws[f"F{row}"].number_format = EUR_FORMAT
         ws[f"F{row}"].font = Font(bold=True)
@@ -294,7 +341,9 @@ uploaded = st.file_uploader("Upload CSV", type=["csv"])
 if uploaded is not None:
     try:
         meta = parse_filename_meta(uploaded.name)
-        df = pd.read_csv(uploaded)
+
+        # Root-cause fix: preserve project codes as text at ingestion time.
+        df = pd.read_csv(uploaded, dtype={"Project code": "string"})
 
         # Light validation early to give immediate feedback
         required = {"Project", "Project code", "Logged Billable hours", "Logged Non-billable hours"}
@@ -330,4 +379,3 @@ Please don’t count **"Ausgleich für zusätzliche Arbeitszeit"**, as this is a
     except Exception as e:
         st.error("Could not process this file.")
         st.exception(e)
-
